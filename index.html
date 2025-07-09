@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>fabric + SAT.js 多边形拖动避让示例</title>
+  <script src="https://cdn.jsdelivr.net/npm/fabric@5.3.0/dist/fabric.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jriecken/sat-js/SAT.min.js"></script>
+  <style>
+    canvas { border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+
+<script>
+  const canvas = new fabric.Canvas('c', { selection: false });
+  const polygons = [];
+
+  const shapes = [
+    { points: [{x:0,y:0},{x:60,y:10},{x:40,y:70},{x:10,y:50}], fill: 'rgba(255,0,0,0.6)', left: 100, top: 100 },
+    { points: [{x:0,y:0},{x:50,y:0},{x:50,y:50},{x:0,y:50}], fill: 'rgba(0,0,255,0.6)', left: 300, top: 100 },
+    { points: [{x:0,y:0},{x:70,y:20},{x:60,y:60},{x:10,y:40}], fill: 'rgba(0,255,0,0.6)', left: 500, top: 100 },
+  ];
+
+  // 添加多边形到画布
+  shapes.forEach(data => {
+    const poly = new fabric.Polygon(data.points, {
+      ...data,
+      selectable: true,
+      hasControls: false,
+      hasBorders: false,
+      objectCaching: false,
+    });
+    polygons.push(poly);
+    canvas.add(poly);
+  });
+
+  // 把fabric多边形转换成SAT多边形，坐标带left/top偏移
+  function toSATPolygon(fabricPoly) {
+    // fabricPoly.points 是相对坐标，+left/top得到绝对坐标
+    // SAT.Polygon第一个参数是位置向量(这里用0,0, 点直接用绝对坐标)
+    const points = fabricPoly.points.map(p => new SAT.Vector(p.x + fabricPoly.left, p.y + fabricPoly.top));
+    return new SAT.Polygon(new SAT.Vector(), points);
+  }
+
+  // 用SAT判断target与其他多边形是否碰撞
+  function isOverlapSAT(target) {
+    const targetPoly = toSATPolygon(target);
+    return polygons.some(p => {
+      if (p === target) return false;
+      const otherPoly = toSATPolygon(p);
+      const response = new SAT.Response();
+      return SAT.testPolygonPolygon(targetPoly, otherPoly, response);
+    });
+  }
+
+  // 查找最近空位，避让
+  function findEmptyPosition(target) {
+    const step = 3; // 步长，数值越小，搜索越细致但计算越慢
+    const maxRadius = 100;
+
+    const originalLeft = target.left;
+    const originalTop = target.top;
+
+    for (let r = step; r <= maxRadius; r += step) {
+      // 优化搜索顺序：先四边，再中间，避免遍历大量无效点
+      for (let dx = -r; dx <= r; dx += step) {
+        for (let dy = -r; dy <= r; dy += step) {
+          // 只检查边界框外围点，减少计算量
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+
+          const nx = originalLeft + dx;
+          const ny = originalTop + dy;
+          target.left = nx;
+          target.top = ny;
+          target.setCoords();
+
+          if (!isOverlapSAT(target)) {
+            return { left: nx, top: ny };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+// 拖动结束事件里处理避让
+canvas.on('object:modified', e => {
+  console.log('拖动结束', e.target.left, e.target.top);
+
+  const obj = e.target;
+  obj.setCoords();
+
+  if (isOverlapSAT(obj)) {
+    const newPos = findEmptyPosition(obj);
+    if (newPos) {
+      obj.animate('left', newPos.left, {
+        duration: 200,
+        onChange: canvas.renderAll.bind(canvas)
+      });
+      obj.animate('top', newPos.top, {
+        duration: 200,
+        onChange: canvas.renderAll.bind(canvas)
+      });
+    }
+  }
+});
+</script>
+</body>
+</html>
